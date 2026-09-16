@@ -1,0 +1,61 @@
+# Publish the USB browser tool to GitHub Pages.
+#
+# webtool/ is a single self-contained HTML file plus an optional bundled
+# firmware image, so there is nothing to build -- the page is generated from
+# web/ by tools/build_web.py and committed. This workflow only uploads it.
+#
+# TO TURN THIS ON: Settings -> Pages -> Build and deployment -> Source:
+# GitHub Actions. Until that is set, the deploy step fails with "Pages is not
+# enabled", which is the only manual step involved.
+#
+# The tool is then served at https://manwe-777.github.io/c3-camlink/.
+#
+# The "flash the bundled firmware" buttons fetch firmware/c3-camlink-app.bin
+# and firmware/c3-camlink-full.bin, which are build artifacts and gitignored,
+# so the hosted tool ships without them. That is deliberate rather than
+# broken: the "choose a .bin file" path always works, and configuring a module
+# over USB -- what the tool is mostly for -- needs no image at all.
+name: pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'webtool/**'
+      - 'web/**'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+# Read the checkout, write a Pages deployment, and mint the OIDC token the
+# deploy action authenticates with.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Never let two deploys race. Queued rather than cancelled, so a push that
+# lands during a deploy still ends up published.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v7
+
+      # The page is committed, so a stale one would be published silently.
+      # Fail instead: this is the same check the build workflow runs.
+      - name: Refuse to publish a stale page
+        run: python3 tools/build_web.py --check
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: webtool
+      - id: deploy
+        uses: actions/deploy-pages@v4

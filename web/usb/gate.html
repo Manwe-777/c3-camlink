@@ -1,0 +1,18 @@
+<div id="usbGate"><div class="box">
+  <h2>Connect to c3-camlink</h2>
+  <p>Plug the module into this computer with a USB-C cable, then connect. It enters setup by itself. Chrome or Edge only.</p>
+  <div class="warn" id="usbNoSerial" style="display:none">This browser has no Web Serial. Use Chrome or Edge, over https or localhost.</div>
+  <button id="usbConnect">Connect over USB</button>
+  <p style="text-align:center;color:#8a929c;font-size:11px;margin:10px 0 0">build @VERSION@</p>
+  <button id="flashToggle" style="width:100%;margin-top:10px;padding:11px;border:1px solid #e3e6ea;border-radius:10px;background:#fff;color:#14171c;font:inherit;font-weight:600;cursor:pointer">Flash / re-flash firmware</button>
+  <div id="flashPanel" style="display:none;margin-top:12px;border-top:1px solid #eee;padding-top:12px">
+    <p style="color:#5b636e;font-size:13px;margin:0 0 10px">Installs c3-camlink onto the board over USB — works on a brand-new board too. A full install resets saved settings; just reconfigure after. Chrome or Edge.</p>
+    <button id="flashUpdate" style="width:100%;padding:11px;border:0;border-radius:10px;background:#0f8a4a;color:#fff;font:inherit;font-weight:600;cursor:pointer">Update firmware — keeps your settings</button>
+    <button id="flashFull" style="width:100%;margin-top:8px;padding:10px;border:1px solid #e3e6ea;border-radius:10px;background:#fff;color:#14171c;font:inherit;font-weight:600;cursor:pointer">Full install — resets settings (blank board)</button>
+    <label style="display:block;margin-top:10px;font-size:13px;color:#5b636e">or choose a .bin file (full image at 0x0): <input type="file" id="flashFile" accept=".bin" style="display:block;margin-top:6px"></label>
+    <div id="flashBarWrap" style="display:none;height:8px;background:#eef;border-radius:4px;margin-top:12px;overflow:hidden"><div id="flashBar" style="height:100%;width:0;background:#0f8a4a;transition:width .1s"></div></div>
+    <div id="flashLog" style="white-space:pre-wrap;font:12px ui-monospace,monospace;color:#5b636e;max-height:140px;overflow:auto;margin-top:8px"></div>
+  </div>
+</div></div>
+<div id="usbConn"><span id="usbConnTxt">c3-camlink</span> <button id="usbDisc" style="margin-left:6px;border:0;background:#c0392b;color:#fff;border-radius:12px;padding:2px 9px;font:inherit;font-size:12px;cursor:pointer">Disconnect</button></div>
+<div id="usbNoData" style="display:none;position:fixed;top:44px;left:50%;transform:translateX(-50%);z-index:901;background:#fdecea;border:1px solid #e74c3c;color:#c0392b;padding:8px 14px;border-radius:8px;font-size:13px">Connected, but no data yet from the module. Click Disconnect, then Connect again.</div>

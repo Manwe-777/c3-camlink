@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta http-equiv="Cache-Control" content="no-store">
+<title>c3-camlink · USB</title>
+<style>
+<!-- include: shared/app.css -->
+
+<!-- include: usb/gate.css -->
+</style>
+</head>
+<body>
+
+<!-- include: usb/gate.html -->
+<script>
+<!-- include: usb/transport.js -->
+</script>
+
+<!-- include: shared/app.html -->
+
+<script>
+<!-- include: shared/app.js -->
+</script>
+<script type="module">
+<!-- include: usb/flash.js -->
+</script>
+</body>
+</html>

@@ -1,0 +1,9 @@
+/* --- USB bridge additions (host tool only) --- */
+#usbGate{position:fixed;inset:0;z-index:1000;background:rgba(20,23,28,.55);display:flex;align-items:center;justify-content:center;padding:20px}
+#usbGate .box{background:#fff;border-radius:16px;max-width:420px;width:100%;padding:22px;box-shadow:0 20px 60px rgba(0,0,0,.3)}
+#usbGate h2{margin:0 0 8px;font-size:18px}
+#usbGate p{color:#5b636e;font-size:14px;line-height:1.5}
+#usbGate button{width:100%;margin-top:14px;padding:12px;border:0;border-radius:10px;background:#0f8a4a;color:#fff;font:inherit;font-weight:600;cursor:pointer}
+#usbGate button:disabled{opacity:.5}
+#usbGate .warn{background:#fdecea;border:1px solid #e74c3c;color:#c0392b;padding:8px 10px;border-radius:8px;font-size:13px;margin-top:10px}
+#usbConn{position:fixed;top:8px;right:10px;z-index:900;font-size:12px;color:#0f8a4a;background:#fff;border:1px solid #e3e6ea;border-radius:20px;padding:3px 10px;display:none}

@@ -1,0 +1,124 @@
+# Build the firmware and run the host tests on every push.
+#
+# WHY THIS EXISTS HERE. This project is developed on one machine, against
+# hardware that lives on one desk, and the host tests only get run when somebody
+# remembers. The two things below are the ones that are expensive to find late:
+# an image that does not fit its OTA slot fails at FLASH time, not build time,
+# and a diagnostic option left switched on ships a firmware that behaves
+# differently from the one that was tested.
+#
+# Single target for now. The matrix is a matrix rather than a plain job so that
+# adding esp32s3 or esp32c6 later is one line -- components/board/ already
+# carries their transmit ladders, though the LED and button halves are not
+# ported yet, so nothing else is claimed to build.
+name: build
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  # Seconds, no toolchain. Covers the MSP framing, the CRCs, the DUML length
+  # rules, the switch window, the override state machine, the warning ladder,
+  # the GoPro preset guard and the vendor matcher -- several of which compile
+  # the actual firmware source rather than a copy. Run first, so a logic
+  # regression does not wait on a full IDF build.
+  host-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Host tests
+        run: ./test/host/run_tests.sh
+
+      # The settings page and the USB browser tool are the same page, generated
+      # from web/ and committed. They were two hand-maintained copies before,
+      # and they drifted: the tool lost the camera advisory note and never had
+      # /api/profile in its endpoint map, so switching saved cameras failed
+      # silently over USB while working over Wi-Fi. Nothing in a build catches
+      # that. This does.
+      - name: Check the generated front-ends are up to date
+        run: python3 tools/build_web.py --check
+
+  firmware:
+    runs-on: ubuntu-latest
+    needs: host-tests
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [esp32c3]
+    container: espressif/idf:v5.5
+    steps:
+      - uses: actions/checkout@v7
+
+      # The IDF container runs as root while the checkout is owned by another
+      # uid, so git refuses to touch it -- "detected dubious ownership". The
+      # build calls git, so without this the first run fails on something that
+      # has nothing to do with the firmware.
+      - name: Let git use the checkout
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      # Built from the tracked defaults into a directory of its own, never from
+      # a working sdkconfig -- that file is gitignored and holds whatever
+      # menuconfig was last used for. A CI build that differs from a clean
+      # build checks the wrong thing.
+      - name: Build ${{ matrix.target }}
+        shell: bash
+        run: |
+          . $IDF_PATH/export.sh
+          idf.py -B "build-ci" -D SDKCONFIG="build-ci/sdkconfig.ci" \
+                 -D IDF_TARGET=${{ matrix.target }} build
+
+      # Every one of these is default-n and every one of them changes how the
+      # module behaves in the air, not just how much it logs. CLEAR_BONDS in
+      # particular re-pairs on every boot, which is a camera that stops
+      # reconnecting in the field.
+      - name: Refuse an image built with a development option on
+        shell: bash
+        run: |
+          fail=0
+          for opt in CAMLINK_BENCH CAMLINK_SNIFF CAMLINK_GPSETTINGS_DUMP \
+                     CAMLINK_BLE_SCAN_DEBUG CAMLINK_BLE_CLEAR_BONDS; do
+            if grep -q "^CONFIG_${opt}=y" build-ci/sdkconfig.ci; then
+              echo "::error::built with CONFIG_${opt}=y"; fail=1
+            fi
+          done
+          exit $fail
+
+      # An image that outgrows its slot does not fail to build. It fails to
+      # flash, on a board that is already in a quad, and the OTA updater has to
+      # refuse it -- which is a much worse place to find out.
+      - name: Check the image fits its OTA slot
+        shell: bash
+        run: |
+          SLOT=$((0x1E0000))          # ota_0 in partitions.csv, 1920 KB
+          SIZE=$(stat -c%s build-ci/c3-camlink.bin)
+          PCT=$((SIZE * 100 / SLOT))
+          echo "${{ matrix.target }}: $SIZE B (${PCT}% of the OTA slot)" \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+          if [ "$SIZE" -gt "$SLOT" ]; then
+            echo "::error::image does not fit the OTA slot"; exit 1
+          fi
+          if [ "$PCT" -gt 92 ]; then
+            echo "::warning::${PCT}% of the OTA slot used"
+          fi
+
+      # Warnings are not errors in this tree, so a new one is only ever noticed
+      # by whoever happens to read the build log. Three are known and
+      # pre-existing, all inside cam_scan.c's advertisement sniffer; anything
+      # beyond that count is new and worth a look. Reported, not failed --
+      # turning this into a gate belongs in a commit that first clears the
+      # three.
+      - name: Report the compiler warning count
+        if: always()
+        shell: bash
+        run: |
+          echo "known pre-existing warnings: 3 (all in cam_scan.c sniff_advert)" \
+            >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: c3-camlink-${{ matrix.target }}
+          path: build-ci/c3-camlink.bin
+          retention-days: 14

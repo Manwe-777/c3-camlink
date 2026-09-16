@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>c3-camlink</title>
+<style>
+<!-- include: shared/app.css -->
+</style>
+</head>
+<body>
+<!-- include: shared/app.html -->
+
+<script>
+<!-- include: shared/app.js -->
+</script>
+</body>
+</html>
