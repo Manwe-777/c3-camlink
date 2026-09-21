@@ -60,120 +60,78 @@ static char        s_ssid[20];
 static httpd_handle_t s_httpd;
 
 /* ==========================================================================
- * One-shot boot flag
+ * One-shot boot flags
+ *
+ * Four of these: setup over Wi-Fi, setup over USB, bind-the-nearest-camera,
+ * and one normal boot for testing. Each is a byte in NVS that the next boot
+ * consumes, because the thing being asked for is a different startup path and
+ * there is no way to switch paths without going through a reset.
+ *
+ * ALWAYS TAKEN BEFORE THE MODE IS ENTERED, never after. If the mode itself is
+ * what crashes the module, the flag has to be gone already or the next boot
+ * re-enters the thing that just failed and the module never comes back. That
+ * rule is the reason these are one-shot at all, and it is why the erase sits
+ * above the return rather than at the call site.
  * ========================================================================== */
-bool webcfg_boot_flag_take(void)
+static bool flag_take(const char *key)
 {
     nvs_handle_t h;
     if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) return false;
 
     uint8_t v = 0;
-    bool set = (nvs_get_u8(h, NVS_KEY_FLAG, &v) == ESP_OK && v != 0);
+    bool set = (nvs_get_u8(h, key, &v) == ESP_OK && v != 0);
     if (set) {
-        /* Consume it before doing anything else. If config mode itself is what
-         * crashes the module, the next boot must come up normally rather than
-         * re-entering the thing that just failed. */
-        nvs_erase_key(h, NVS_KEY_FLAG);
+        nvs_erase_key(h, key);
         nvs_commit(h);
     }
     nvs_close(h);
     return set;
 }
 
-void webcfg_reboot_into_config(void)
+/* Set the flag and go. Does not return.
+ *
+ * The camera is dropped first so it is left advertising rather than holding a
+ * link to a module that is about to vanish, and the delay is there to let the
+ * log line drain before the UART goes with everything else. */
+static void reboot_with_flag(const char *key, const char *why) __attribute__((noreturn));
+static void reboot_with_flag(const char *key, const char *why)
 {
     nvs_handle_t h;
     if (nvs_open(NVS_NS, NVS_READWRITE, &h) == ESP_OK) {
-        nvs_set_u8(h, NVS_KEY_FLAG, 1);
+        nvs_set_u8(h, key, 1);
         nvs_commit(h);
         nvs_close(h);
     }
-    ESP_LOGW(TAG, "rebooting into config mode");
-    duml_cam_disconnect();            /* leave the camera advertising, not waiting */
-    vTaskDelay(pdMS_TO_TICKS(120));   /* let the log line drain */
+    ESP_LOGW(TAG, "%s", why);
+    duml_cam_disconnect();
+    vTaskDelay(pdMS_TO_TICKS(120));
     esp_restart();
     for (;;) { }                      /* esp_restart() does not return */
 }
 
-bool webcfg_bind_flag_take(void)
-{
-    nvs_handle_t h;
-    if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) return false;
-    uint8_t v = 0;
-    bool set = (nvs_get_u8(h, NVS_KEY_BIND, &v) == ESP_OK && v != 0);
-    if (set) {
-        nvs_erase_key(h, NVS_KEY_BIND);
-        nvs_commit(h);
-    }
-    nvs_close(h);
-    return set;
-}
+bool webcfg_boot_flag_take(void)       { return flag_take(NVS_KEY_FLAG); }
+bool webcfg_bind_flag_take(void)       { return flag_take(NVS_KEY_BIND); }
+bool webcfg_bootnormal_flag_take(void) { return flag_take(NVS_KEY_NORMAL); }
+bool webcfg_usbcfg_flag_take(void)     { return flag_take(NVS_KEY_USB); }
 
-bool webcfg_bootnormal_flag_take(void)
+void webcfg_reboot_into_config(void)
 {
-    nvs_handle_t h;
-    if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) return false;
-    uint8_t v = 0;
-    bool set = (nvs_get_u8(h, NVS_KEY_NORMAL, &v) == ESP_OK && v != 0);
-    if (set) { nvs_erase_key(h, NVS_KEY_NORMAL); nvs_commit(h); }
-    nvs_close(h);
-    return set;
+    reboot_with_flag(NVS_KEY_FLAG, "rebooting into config mode");
 }
 
 void webcfg_reboot_into_normal(void)
 {
-    nvs_handle_t h;
-    if (nvs_open(NVS_NS, NVS_READWRITE, &h) == ESP_OK) {
-        nvs_set_u8(h, NVS_KEY_NORMAL, 1);
-        nvs_commit(h);
-        nvs_close(h);
-    }
-    ESP_LOGW(TAG, "rebooting into NORMAL mode for one boot (test)");
-    duml_cam_disconnect();
-    vTaskDelay(pdMS_TO_TICKS(120));
-    esp_restart();
-    for (;;) { }
-}
-
-bool webcfg_usbcfg_flag_take(void)
-{
-    nvs_handle_t h;
-    if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) return false;
-    uint8_t v = 0;
-    bool set = (nvs_get_u8(h, NVS_KEY_USB, &v) == ESP_OK && v != 0);
-    if (set) { nvs_erase_key(h, NVS_KEY_USB); nvs_commit(h); }
-    nvs_close(h);
-    return set;
+    reboot_with_flag(NVS_KEY_NORMAL, "rebooting into NORMAL mode for one boot (test)");
 }
 
 void webcfg_reboot_into_usbcfg(void)
 {
-    nvs_handle_t h;
-    if (nvs_open(NVS_NS, NVS_READWRITE, &h) == ESP_OK) {
-        nvs_set_u8(h, NVS_KEY_USB, 1);
-        nvs_commit(h);
-        nvs_close(h);
-    }
-    ESP_LOGW(TAG, "rebooting into USB-config mode");
-    duml_cam_disconnect();
-    vTaskDelay(pdMS_TO_TICKS(120));
-    esp_restart();
-    for (;;) { }
+    reboot_with_flag(NVS_KEY_USB, "rebooting into USB-config mode");
 }
 
 void webcfg_reboot_into_bind(void)
 {
-    nvs_handle_t h;
-    if (nvs_open(NVS_NS, NVS_READWRITE, &h) == ESP_OK) {
-        nvs_set_u8(h, NVS_KEY_BIND, 1);
-        nvs_commit(h);
-        nvs_close(h);
-    }
-    ESP_LOGW(TAG, "rebooting into bind mode");
-    duml_cam_disconnect();
-    vTaskDelay(pdMS_TO_TICKS(120));
-    esp_restart();
-    for (;;) { }
+    reboot_with_flag(NVS_KEY_BIND, "rebooting into bind mode");
 }
 
 const char *webcfg_ssid(void) { return s_ssid; }
