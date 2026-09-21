@@ -48,10 +48,26 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # The staleness check compiles, so it needs Node even though nothing
+      # being PUBLISHED does: dist/index.html is committed and this job only
+      # uploads it. tools/build_web.py inlines web/.build/shared/app.js, which
+      # tsc writes and which is gitignored, so without this the check fails
+      # complaining the compile is missing rather than that the page is stale.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install the front-end toolchain
+        run: npm ci
+        working-directory: web
+
       # The page is committed, so a stale one would be published silently.
-      # Fail instead: this is the same check the build workflow runs.
+      # Fail instead: compile from web/ and refuse if the result differs from
+      # what is checked in. Same three steps as the build workflow's web job.
       - name: Refuse to publish a stale page
-        run: python3 tools/build_web.py --check
+        run: npx tsc && python3 ../tools/build_web.py --check
+        working-directory: web
 
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v4
