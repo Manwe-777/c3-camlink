@@ -18,7 +18,7 @@
 #include "duml_cam.h"
 #include "camlink_cfg.h"
 #include "ble.h"
-#include "esp_bt.h"
+#include "board.h"
 
 static const char *TAG = "CAMLINK";
 
@@ -83,13 +83,24 @@ void camlink_set_setup_hint(camlink_setup_hint_t hint)
 static volatile bool s_press;
 static volatile bool s_manual_record;
 
-/* Last OSD frame, for the bench readout. Written only by the logic task. */
+/* Last OSD frame, for the bench readout.
+ *
+ * Under s_cam_lock like everything else it sits beside: the logic task writes
+ * all four rows as one frame and the CLI reads all four, so without the lock a
+ * read can land mid-write and return two rows of one frame and two of the
+ * next. Harmless on a bench readout, but it is the only shared buffer that was
+ * outside the lock, and "harmless" is not a property anyone can check later. */
 static char s_osd[4][17];
 
 void camlink_get_osd(char out[4][17])
 {
     if (out == NULL) return;
-    memcpy(out, s_osd, sizeof(s_osd));
+    if (s_cam_lock && xSemaphoreTake(s_cam_lock, pdMS_TO_TICKS(20)) == pdTRUE) {
+        memcpy(out, s_osd, sizeof(s_osd));
+        xSemaphoreGive(s_cam_lock);
+    } else {
+        memset(out, 0, sizeof(char[4][17]));
+    }
 }
 
 static uint32_t now_ms(void)
@@ -97,18 +108,14 @@ static uint32_t now_ms(void)
     return (uint32_t)(esp_timer_get_time() / 1000);
 }
 
-/* cfg_tx_t -> esp_power_level_t. Duplicated from app_main deliberately: the
- * mapping belongs with whoever applies it, and camlink is the only thing that
- * changes power at runtime. */
-static int tx_level_for_cfg(uint8_t cfg_tx)
-{
-    switch (cfg_tx) {
-    case CFG_TX_N12: return ESP_PWR_LVL_N12;
-    case CFG_TX_N0:  return ESP_PWR_LVL_N0;
-    case CFG_TX_P3:  return ESP_PWR_LVL_P3;
-    default:         return ESP_PWR_LVL_N24;
-    }
-}
+/* The configured rung, applied through the board's ladder.
+ *
+ * cfg_tx_t IS a rung index -- CFG_TX_N24 is 0, the quietest the part can do --
+ * so board_tx_level() is the whole mapping. Naming ESP_PWR_LVL_* here instead
+ * would hard-code the C3's ladder into logic that has nothing to do with which
+ * chip this is, and ESP_PWR_LVL_N24 does not exist on a C6 at all: the file
+ * would stop compiling for the one target the indirection exists to allow.
+ * See components/board/include/board.h. */
 
 /* ------------------------------------------------------------------------- */
 /* Camera status                                                              */
@@ -338,7 +345,7 @@ void camlink_logic_task(void *arg)
         if (cfg.tx_auto && ever_had_fc) {
             uint8_t want_tx = m.armed ? CFG_TX_N24 : cfg.tx_power;
             if (!tx_applied || want_tx != tx_now) {
-                camlink_ble_apply_tx_level(tx_level_for_cfg(want_tx));
+                camlink_ble_apply_tx_level(board_tx_level(want_tx));
                 ESP_LOGI(TAG, "BLE tx -> %s (%s)", camlink_cfg_tx_name(want_tx),
                          m.armed ? "armed" : "disarmed");
                 tx_now = want_tx;
@@ -573,7 +580,10 @@ void camlink_logic_task(void *arg)
                            (const uint8_t (*)[OSD_ROW_FIELDS])cfg.osd,
                            s_setup_hint, lines);
 
-        memcpy(s_osd, lines, sizeof(s_osd));
+        if (xSemaphoreTake(s_cam_lock, pdMS_TO_TICKS(20)) == pdTRUE) {
+            memcpy(s_osd, lines, sizeof(s_osd));
+            xSemaphoreGive(s_cam_lock);
+        }
 
         /* Write a slot when its text changed -- and rewrite all four once a
          * second regardless.

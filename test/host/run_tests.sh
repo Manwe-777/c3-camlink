@@ -25,6 +25,7 @@ SUITES=(
   "test_gopro_status  | ../../components/gopro/include  |"
   "test_switch_window | ../../components/camlink/include |"
   "test_url_decode    | ../../components/webcfg/include | ../../components/webcfg/url_decode.c"
+  "test_json_buf      | ../../components/webcfg/include | ../../components/webcfg/json_buf.c"
   "test_press         | ../../components/camlink/include |"
   "test_override      | ../../components/camlink/include |"
   "test_setup_guard   | ../../components/camlink/include |"

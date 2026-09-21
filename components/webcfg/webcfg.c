@@ -28,6 +28,7 @@
 #include "camlink_cfg.h"
 #include "osd_fields.h"
 #include "url_decode.h"
+#include "json_buf.h"
 #include "duml_cam.h"
 #include "cam_scan.h"
 #include "ble.h"
@@ -277,7 +278,10 @@ int webcfg_state_json(char *body, size_t cap)
 
     const esp_app_desc_t *app = esp_app_get_description();
 
-    int  n = snprintf(body, cap,
+    jbuf_t j;
+    jbuf_init(&j, body, cap);
+
+    jbuf_addf(&j,
         "{\"ssid\":\"%s\",\"fw\":\"%s\","
         "\"cfg\":{\"mode\":%u,\"aux\":%d,\"min\":%u,\"max\":%u,\"tx\":%u,\"kind\":%u,\"txauto\":%u,\"cfgaux\":%d,\"cfgkind\":%u,\"cfghold\":%u,\"hilight\":%d,\"stopdelay\":%u},"
         "\"cam\":{\"bound\":%s,\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\","
@@ -298,26 +302,26 @@ int webcfg_state_json(char *body, size_t cap)
         fc.armed   ? "true" : "false",
         fc.rc_count);
 
-    /* Every channel the FC reports, not a convenient prefix of them. Truncating
-     * this list once hid the user's own arm and record switches, which sat on
-     * channels past the cut, and cost an evening of "the button isn't detected". */
-    for (unsigned i = 0; i < fc.rc_count && i < MSP_MAX_RC_CHANNELS; i++) {
-        n += snprintf(body + n, cap - n, "%s%u", i ? "," : "", fc.rc[i]);
-        if (n >= (int)sizeof(body) - 8) break;
-    }
-    n += snprintf(body + n, cap - n, "]},");
+    /* Every channel the FC reports, not a convenient prefix of them. A user's
+     * arm and record switches sit on high channels, and the settings page
+     * indexes this array by rc[aux + 3] -- so a truncated list does not look
+     * like a bug, it looks like a channel the FC never sent. The bounds live
+     * in jbuf and are tested in test/host/test_json_buf.c. */
+    jbuf_add_rc(&j, fc.rc, fc.rc_count < MSP_MAX_RC_CHANNELS
+                            ? fc.rc_count : MSP_MAX_RC_CHANNELS);
+    jbuf_addf(&j, "]},");
 
     /* Saved camera profiles, so the page can show which cameras are remembered
      * and which is active. */
     {
         char plabels[4][6]; char pmacs[4][18]; int pactive = -1;
         int pcount = duml_cam_profile_list(plabels, pmacs, &pactive);
-        n += snprintf(body + n, cap - n, "\"profiles\":{\"active\":%d,\"list\":[", pactive);
+        jbuf_addf(&j, "\"profiles\":{\"active\":%d,\"list\":[", pactive);
         for (int i = 0; i < pcount; i++) {
-            n += snprintf(body + n, cap - n, "%s{\"label\":\"%s\",\"mac\":\"%s\"}",
-                          i ? "," : "", plabels[i], pmacs[i]);
+            jbuf_addf(&j, "%s{\"label\":\"%s\",\"mac\":\"%s\"}",
+                      i ? "," : "", plabels[i], pmacs[i]);
         }
-        n += snprintf(body + n, cap - n, "]},");
+        jbuf_addf(&j, "]},");
     }
 
     /* The OSD field catalogue, straight from the firmware.
@@ -327,25 +331,29 @@ int webcfg_state_json(char *body, size_t cap)
      * hard-coding it in the page means the two cannot drift: add a field to
      * osd_fields[] and the picker grows a tile for it, with the right budget,
      * without the JavaScript being touched. */
-    n += snprintf(body + n, cap - n, "\"osdmax\":%d,\"fields\":[", OSD_ROW_MAX);
+    jbuf_addf(&j, "\"osdmax\":%d,\"fields\":[", OSD_ROW_MAX);
     for (int f = 1; f < OSD_F__COUNT; f++) {
-        n += snprintf(body + n, cap - n,
-                      "%s{\"id\":%d,\"name\":\"%s\",\"ex\":\"%s\",\"w\":%u}",
-                      f > 1 ? "," : "", f, osd_fields[f].name,
-                      osd_fields[f].example, (unsigned)osd_fields[f].width);
+        jbuf_addf(&j, "%s{\"id\":%d,\"name\":\"%s\",\"ex\":\"%s\",\"w\":%u}",
+                  f > 1 ? "," : "", f, osd_fields[f].name,
+                  osd_fields[f].example, (unsigned)osd_fields[f].width);
     }
-    n += snprintf(body + n, cap - n, "],\"osd\":[");
+    jbuf_addf(&j, "],\"osd\":[");
     for (int r = 0; r < OSD_ROWS; r++) {
-        n += snprintf(body + n, cap - n, "%s[", r ? "," : "");
+        jbuf_addf(&j, "%s[", r ? "," : "");
         for (int i = 0; i < OSD_ROW_FIELDS; i++) {
-            n += snprintf(body + n, cap - n, "%s%u",
-                          i ? "," : "", (unsigned)cfg.osd[r][i]);
+            jbuf_addf(&j, "%s%u", i ? "," : "", (unsigned)cfg.osd[r][i]);
         }
-        n += snprintf(body + n, cap - n, "]");
+        jbuf_addf(&j, "]");
     }
-    n += snprintf(body + n, cap - n, "]}");
+    jbuf_addf(&j, "]}");
 
-    return n;
+    /* A truncated body is not valid JSON and the page would render nothing at
+     * all from it, so say so rather than serving half an object. */
+    if (!jbuf_ok(&j)) {
+        ESP_LOGE(TAG, "state json truncated at %u of %u bytes",
+                 (unsigned)jbuf_len(&j), (unsigned)cap);
+    }
+    return (int)jbuf_len(&j);
 }
 
 static esp_err_t state_get(httpd_req_t *req)
@@ -534,20 +542,14 @@ int webcfg_scan_json(char *body, size_t cap)
     uint8_t bound_mac[6];
     bool bound = duml_cam_bound_addr(bound_mac);
 
-    int  w = snprintf(body, cap, "{\"cams\":[");
+    jbuf_t j;
+    jbuf_init(&j, body, cap);
+    jbuf_addf(&j, "{\"cams\":[");
 
     for (int i = 0; i < n; i++) {
         const cam_scan_entry_t *c = &cams[i];
-        /* Stop cleanly on the last entry that fits rather than emitting a
-         * truncated object: a half-written JSON array fails to parse and the
-         * page shows nothing at all, which is a worse answer than a short
-         * list. CAM_SCAN_MAX is 12 and each entry is ~80 bytes, so this is a
-         * backstop, not the normal path. */
-        /* C3CAMLINK PATCH: the note is an extra ~80 bytes when present, so the
-         * backstop grew with it. */
-        if (w > (int)cap - 260) break;
         const char *note = cam_scan_entry_note(c);
-        w += snprintf(body + w, cap - w,
+        jbuf_addf(&j,
             "%s{\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\","
             "\"id\":\"%02X%02X%02X%02X%02X%02X\",\"name\":\"%s\","
             "\"model\":\"%s\",\"vendor\":\"%s\",\"rssi\":%d,\"bound\":%s,"
@@ -559,10 +561,16 @@ int webcfg_scan_json(char *body, size_t cap)
             c->vendor == CAM_VENDOR_GOPRO ? "gopro" : "dji", c->rssi,
             (bound && memcmp(bound_mac, c->bda, 6) == 0) ? "true" : "false",
             note ? note : "");
+        /* Stop cleanly on the last entry that FITS rather than emitting a
+         * truncated object: half a JSON array fails to parse and the page then
+         * shows nothing at all, which is a worse answer than a short list.
+         * jbuf_addf() appends nothing at all on a write that does not fit, so
+         * the array is always closeable from here. */
+        if (jbuf_full(&j)) break;
     }
-    w += snprintf(body + w, cap - w, "]}");
+    jbuf_addf(&j, "]}");
 
-    return w;
+    return (int)jbuf_len(&j);
 }
 
 static esp_err_t scan_get(httpd_req_t *req)
@@ -927,10 +935,29 @@ static esp_err_t not_found(httpd_req_t *req, httpd_err_code_t err)
     return ESP_OK;
 }
 
+/* The routes, declared before the config so max_uri_handlers can be derived
+ * from the array rather than guessed. A hand-kept number that falls behind the
+ * table does not fail loudly: httpd_register_uri_handler() returns an error
+ * nobody reads, and the route simply 404s. */
+static const httpd_uri_t s_uris[] = {
+    { .uri = "/",            .method = HTTP_GET,  .handler = page_get   },
+    { .uri = "/api/state",   .method = HTTP_GET,  .handler = state_get  },
+    { .uri = "/api/config",  .method = HTTP_POST, .handler = config_post },
+    { .uri = "/api/osd",     .method = HTTP_POST, .handler = osd_post   },
+    { .uri = "/api/scan",    .method = HTTP_GET,  .handler = scan_get   },
+    { .uri = "/api/bind",    .method = HTTP_POST, .handler = bind_post  },
+    { .uri = "/api/forget",  .method = HTTP_POST, .handler = forget_post },
+    { .uri = "/api/profile", .method = HTTP_POST, .handler = profile_post },
+    { .uri = "/api/repair",  .method = HTTP_POST, .handler = repair_post },
+    { .uri = "/api/exit",    .method = HTTP_POST, .handler = exit_post  },
+    { .uri = "/api/update",  .method = HTTP_POST, .handler = update_post },
+};
+#define URI_COUNT ((int)(sizeof(s_uris) / sizeof(s_uris[0])))
+
 static void http_start(void)
 {
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
-    cfg.max_uri_handlers = 13;
+    cfg.max_uri_handlers = URI_COUNT;
     cfg.lru_purge_enable = true;
     cfg.stack_size       = 5120;
     /* A 1.4 MB upload from a phone is slow and bursty; the stock 5 s would
@@ -943,21 +970,14 @@ static void http_start(void)
         return;
     }
 
-    static const httpd_uri_t uris[] = {
-        { .uri = "/",            .method = HTTP_GET,  .handler = page_get   },
-        { .uri = "/api/state",   .method = HTTP_GET,  .handler = state_get  },
-        { .uri = "/api/config",  .method = HTTP_POST, .handler = config_post },
-        { .uri = "/api/osd",     .method = HTTP_POST, .handler = osd_post   },
-        { .uri = "/api/scan",    .method = HTTP_GET,  .handler = scan_get   },
-        { .uri = "/api/bind",    .method = HTTP_POST, .handler = bind_post  },
-        { .uri = "/api/forget",  .method = HTTP_POST, .handler = forget_post },
-        { .uri = "/api/profile", .method = HTTP_POST, .handler = profile_post },
-        { .uri = "/api/repair",  .method = HTTP_POST, .handler = repair_post },
-        { .uri = "/api/exit",    .method = HTTP_POST, .handler = exit_post  },
-        { .uri = "/api/update",  .method = HTTP_POST, .handler = update_post },
-    };
-    for (size_t i = 0; i < sizeof(uris) / sizeof(uris[0]); i++) {
-        httpd_register_uri_handler(s_httpd, &uris[i]);
+    for (int i = 0; i < URI_COUNT; i++) {
+        esp_err_t e = httpd_register_uri_handler(s_httpd, &s_uris[i]);
+        if (e != ESP_OK) {
+            /* Every route here is one the settings page calls. A missing one
+             * is a page that half works, so name it rather than 404 quietly. */
+            ESP_LOGE(TAG, "route %s not registered: %s",
+                     s_uris[i].uri, esp_err_to_name(e));
+        }
     }
     httpd_register_err_handler(s_httpd, HTTPD_404_NOT_FOUND, not_found);
 }

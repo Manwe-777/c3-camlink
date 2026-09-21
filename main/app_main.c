@@ -34,7 +34,7 @@
 #include "esp_bt_device.h"
 #include "esp_gap_ble_api.h"
 #include "esp_ota_ops.h"
-#include "esp_bt.h"
+#include "board.h"
 #include "nvs_flash.h"
 #include "webcfg.h"
 #include "cam_scan.h"
@@ -357,19 +357,12 @@ static void ui_task_update(void *arg)
     }
 }
 
-/* Map the stored setting onto the controller's power enum. The enum's numeric
- * values are an IDF detail; the stored value is ours. Keep the translation in
- * one place so a future IDF renumbering cannot quietly make a saved -24 dBm
- * mean something louder. */
-static int tx_level_for(uint8_t cfg_tx)
-{
-    switch (cfg_tx) {
-    case CFG_TX_N12: return ESP_PWR_LVL_N12;
-    case CFG_TX_N0:  return ESP_PWR_LVL_N0;
-    case CFG_TX_P3:  return ESP_PWR_LVL_P3;
-    default:         return ESP_PWR_LVL_N24;
-    }
-}
+/* The stored setting IS a rung index -- CFG_TX_N24 is 0, the quietest the part
+ * can do -- so board_tx_level() is the entire translation, and it is the only
+ * place that knows which ladder this chip has. Naming ESP_PWR_LVL_* here would
+ * both duplicate that table and pin this file to the C3: ESP_PWR_LVL_N24 does
+ * not exist on a C6, so it would not compile for the target the indirection
+ * exists to allow. See components/board/include/board.h. */
 
 /* --------------------------------------------------------------------------
  * Config mode
@@ -575,7 +568,7 @@ static void usbcfg_mode(void)
 
     camlink_cfg_t c;
     camlink_cfg_get(&c);
-    camlink_ble_set_tx_level(tx_level_for(c.tx_power));
+    camlink_ble_set_tx_level(board_tx_level(c.tx_power));
 
     esp_err_t e = cam_scan_start();
     if (e != ESP_OK) {
@@ -621,7 +614,7 @@ static void config_mode(void)
     {
         camlink_cfg_t c;
         camlink_cfg_get(&c);
-        camlink_ble_set_tx_level(tx_level_for(c.tx_power));
+        camlink_ble_set_tx_level(board_tx_level(c.tx_power));
 
         esp_err_t e = cam_scan_start();
         if (e != ESP_OK) {
@@ -791,7 +784,7 @@ void app_main(void)
     {
         camlink_cfg_t c;
         camlink_cfg_get(&c);
-        camlink_ble_set_tx_level(tx_level_for(c.tx_power));
+        camlink_ble_set_tx_level(board_tx_level(c.tx_power));
         ESP_LOGI(TAG, "BLE TX power %s", camlink_cfg_tx_name(c.tx_power));
     }
 

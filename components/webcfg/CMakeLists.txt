@@ -1,5 +1,5 @@
 idf_component_register(
-    SRCS "webcfg.c" "url_decode.c"
+    SRCS "webcfg.c" "url_decode.c" "json_buf.c"
     INCLUDE_DIRS "include"
     REQUIRES esp_wifi esp_coex esp_http_server esp_netif esp_event nvs_flash app_update
              camlink duml msp)
