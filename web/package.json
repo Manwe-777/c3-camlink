@@ -1,0 +1,20 @@
+{
+  "name": "c3-camlink-web",
+  "private": true,
+  "description": "Sources for the two browser front-ends. Node is needed only to edit them; the firmware build and the Pages deploy consume the committed outputs.",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "compile": "tsc",
+    "build": "tsc && python3 ../tools/build_web.py",
+    "check": "tsc --noEmit && eslint . && tsc && python3 ../tools/build_web.py --check"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.37.0",
+    "@types/w3c-web-serial": "^1.0.7",
+    "eslint": "^9.37.0",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.46.0"
+  }
+}

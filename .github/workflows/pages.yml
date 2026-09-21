@@ -1,6 +1,6 @@
 # Publish the USB browser tool to GitHub Pages.
 #
-# webtool/ is a single self-contained HTML file plus an optional bundled
+# dist/ is a single self-contained HTML file plus an optional bundled
 # firmware image, so there is nothing to build -- the page is generated from
 # web/ by tools/build_web.py and committed. This workflow only uploads it.
 #
@@ -21,7 +21,7 @@ on:
   push:
     branches: [main]
     paths:
-      - 'webtool/**'
+      - 'dist/**'
       - 'web/**'
       - '.github/workflows/pages.yml'
   workflow_dispatch:
@@ -56,6 +56,6 @@ jobs:
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v4
         with:
-          path: webtool
+          path: dist
       - id: deploy
         uses: actions/deploy-pages@v4

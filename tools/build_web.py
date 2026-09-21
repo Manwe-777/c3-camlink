@@ -5,7 +5,7 @@ WHY THIS EXISTS. There are two front-ends and they are the same page:
 
   components/webcfg/web/index.html  the settings page served over Wi-Fi by the
                                     module itself, gzipped into the firmware
-  webtool/index.html                the same page driven over a USB cable,
+  dist/index.html                   the same page driven over a USB cable,
                                     served from GitHub Pages
 
 Kept in step by hand they drift, and the drift is invisible: the two files are
@@ -18,10 +18,18 @@ the shared page in one copy and the USB-only parts beside it:
 
   web/shared/     the page: CSS, markup, and the settings logic, transport-free
   web/usb/        the Web Serial transport, the connect gate, the esptool panel
+  web/types/      the shapes the firmware's JSON actually has
   web/*.html.in   one template per output, listing the fragments in order
 
+THE LOGIC IS TYPESCRIPT. A template that includes `shared/app.js` is asking for
+the COMPILED form of `web/shared/app.ts`, which tsc writes to web/.build/. That
+indirection is deliberate: templates name the file the browser ends up running,
+and only this module knows where it came from. Run `npm run build` in web/ to
+do both steps, or `npx tsc` here first -- this script refuses rather than
+silently inlining a stale compile.
+
 The outputs are COMMITTED, not built on demand. The firmware build just gzips a
-file that is already there, and Pages just serves one, so neither needs Python.
+file that is already there, and Pages just serves one, so neither needs Node.
 The cost of that is the outputs can go stale, which `--check` catches in CI.
 
 Usage:
@@ -33,14 +41,27 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 WEB = ROOT / "web"
+# Where tsc puts the compiled logic. Gitignored: it is an intermediate, and the
+# committed outputs below are what anything downstream actually consumes.
+BUILD = WEB / ".build"
 
 # template -> output
 TARGETS = {
     "device.html.in": "components/webcfg/web/index.html",
-    "usb.html.in": "webtool/index.html",
+    "usb.html.in": "dist/index.html",
 }
 
 INCLUDE = "<!-- include: "
+
+
+def fragment_path(rel: str) -> Path:
+    """Where a template's include actually lives.
+
+    Anything ending .js is compiler output and comes from .build/; everything
+    else -- CSS, markup -- is a source file and comes from web/ directly. A
+    template therefore names what the browser runs, not where it was built.
+    """
+    return (BUILD / rel) if rel.endswith(".js") else (WEB / rel)
 
 
 def render(template: Path, version: str) -> str:
@@ -54,8 +75,12 @@ def render(template: Path, version: str) -> str:
         if not stripped.endswith("-->"):
             sys.exit(f"{template.name}:{lineno}: malformed include: {stripped}")
         rel = stripped[len(INCLUDE):-len("-->")].strip()
-        frag = WEB / rel
+        frag = fragment_path(rel)
         if not frag.is_file():
+            if rel.endswith(".js"):
+                sys.exit(f"{template.name}:{lineno}: {frag.relative_to(ROOT)} is "
+                         f"missing -- compile the TypeScript first:\n"
+                         f"    cd web && npm install && npx tsc")
             sys.exit(f"{template.name}:{lineno}: no such fragment: {rel}")
         text = frag.read_text(encoding="utf-8")
         # Fragments are whole lines and end with a newline, so they drop into
@@ -74,44 +99,16 @@ def render(template: Path, version: str) -> str:
     return doctype + sep + banner + rest
 
 
-def check_endpoints() -> list:
-    """Every /api/ endpoint the shared page calls must be routable over USB.
-
-    This is the one failure the split does not prevent by itself. The shared
-    page reaches an endpoint by name; the USB transport has to recognise that
-    name to turn it into a serial verb. A name that is missing works perfectly
-    over Wi-Fi and fails silently over the cable, which is precisely how
-    profile switching was broken for several versions with nobody noticing.
-
-    So it is checked here rather than trusted.
-    """
-    import re
-
-    shared = (WEB / "shared" / "app.js").read_text(encoding="utf-8")
-    transport = (WEB / "usb" / "transport.js").read_text(encoding="utf-8")
-
-    called = set(re.findall(r"""fetch\('/api/([a-z]+)'""", shared))
-    block = re.search(r"const map=\{(.*?)\};", transport, re.S)
-    if not block:
-        return ["could not find the endpoint map in usb/transport.js"]
-    mapped = set(re.findall(r"(\w+):'\w+'", block.group(1)))
-
-    # /api/update is deliberately refused over USB -- flashing there goes
-    # through esptool, not the settings API -- so it is handled, not mapped.
-    handled = mapped | {"update"}
-    return [f"/api/{e} is called by shared/app.js but not handled by "
-            f"usb/transport.js" for e in sorted(called - handled)]
-
-
 def main() -> int:
     check = "--check" in sys.argv[1:]
     version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
 
-    problems = check_endpoints()
-    if problems:
-        for p in problems:
-            print(f"error: {p}", file=sys.stderr)
-        return 1
+    # There used to be a regex here that pulled every /api/ name out of the page
+    # and diffed it against the USB transport's verb table, because an endpoint
+    # in one and not the other works over Wi-Fi and fails silently over the
+    # cable. That is now the `Endpoint` union in web/types/api.d.ts: the
+    # transport types its table as Record<Endpoint, string>, so a missing entry
+    # does not compile. A type beats a linter that has to be kept in step.
 
     stale = []
     for name, dest in TARGETS.items():
@@ -133,7 +130,7 @@ def main() -> int:
         print("These generated files do not match web/:", file=sys.stderr)
         for dest in stale:
             print(f"  {dest}", file=sys.stderr)
-        print("\nEdit the sources under web/, then run tools/build_web.py "
+        print("\nEdit the sources under web/, then run `npm run build` there "
               "and commit the result.", file=sys.stderr)
         return 1
     if check:

@@ -52,7 +52,7 @@ tab no peripheral is needed on that UART — just leave it free.
 ## Installing
 
 Grab the latest release and flash `c3-camlink-<version>-full.bin` at offset
-`0x0`, or open `webtool/index.html` in Chrome or Edge and let it do the flashing
+`0x0`, or open `dist/index.html` in Chrome or Edge and let it do the flashing
 over USB. After that, updates install themselves from the settings page.
 
 See [docs/RELEASES.md](docs/RELEASES.md) for what the two artifacts are, why
@@ -71,6 +71,12 @@ ESP-IDF v5.5. The host tests need no toolchain and no hardware:
 ./test/host/run_tests.sh
 ```
 
+Editing the browser front-ends additionally needs Node:
+
+```bash
+cd web && npm install && npm run build
+```
+
 ## The tree
 
 ```
@@ -84,6 +90,7 @@ components/
   board/ ui/          per-part radio facts; button and LED
   webcfg/ usbcli/     the Wi-Fi settings server and the USB serial API
 web/                  sources for both browser front-ends -- see web/README.md
+dist/                 the USB browser tool, GENERATED from web/, published to Pages
 test/host/            tests that run on a laptop
 tools/                release and codegen scripts
 docs/                 roadmap, hardware testing notes, release process
@@ -91,9 +98,10 @@ docs/                 roadmap, hardware testing notes, release process
 
 Two things worth knowing before editing:
 
-- **`components/webcfg/web/index.html` and `webtool/index.html` are
-  generated.** Edit the sources under [`web/`](web/README.md) and run
-  `tools/build_web.py`. CI fails if the committed outputs are stale.
+- **`components/webcfg/web/index.html` and `dist/index.html` are
+  generated.** Edit the TypeScript and markup under [`web/`](web/README.md)
+  and run `npm run build` there. CI fails if the committed outputs are stale.
+  Node is a contributor-only dependency: building the firmware never needs it.
 - **`components/dji_link/` is vendored.** Local changes are tagged in-line with
   `C3CAMLINK PATCH` or `C3CAMLINK ADDITION` so the derived work stays separable
   from DJI's original.

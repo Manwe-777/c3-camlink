@@ -65,7 +65,7 @@ reply                                    -> none, 4s budget expires
 
 ### 2. Webtool silent failures — FIXED in the page (same day)
 
-What changed in `webtool/index.html`, and why:
+What changed in `dist/index.html`, and why:
 
 - **`Board._read()` no longer swallows the error.** A deliberate `disconnect()`
   sets `closing` and is not a fault; any other end of the read loop is a lost

@@ -36,11 +36,18 @@ preview.html
 # tools/release.sh writes all three here; they are just not committed.
 releases/
 
+# Front-end intermediates. web/.build/ is tsc output that tools/build_web.py
+# inlines into the two committed pages, so it is a step on the way rather than
+# a thing anything downstream reads. Node is a contributor-only dependency:
+# neither the firmware build nor the Pages deploy touches either of these.
+web/.build/
+web/node_modules/
+
 .DS_Store
 
 # Bundled firmware for the browser flasher: build artifacts, not source, kept
 # out of git like the release binaries. There are two of them and they are not
-# interchangeable -- see webtool/firmware/README.md for which goes where. The
+# interchangeable -- see dist/firmware/README.md for which goes where. The
 # tool's "choose a .bin" option works without either.
-webtool/firmware/*.bin
+dist/firmware/*.bin
 build-ci/

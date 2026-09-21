@@ -1,0 +1,37 @@
+{
+  // Emitted JS is inlined into a <script> tag by tools/build_web.py and ends up
+  // gzipped inside a firmware image, so the emit has to stay lean:
+  //
+  //   target es2022  - no downlevelling, so tsc emits no helper functions. An
+  //                    es5 target would inject __awaiter/__generator and cost
+  //                    real bytes in a page that has a budget.
+  //   no minifier    - deliberately. The page is read by people debugging a
+  //                    module over a cable, and gzip already does the work
+  //                    that matters.
+  //
+  // The browser is always Chromium: the USB tool needs Web Serial, and the
+  // on-device page is only ever opened from a phone next to the module.
+  "compilerOptions": {
+    "target": "es2022",
+    "module": "es2022",
+    "moduleResolution": "bundler",
+    "lib": ["es2022", "dom", "dom.iterable"],
+
+    "strict": true,
+    "noUncheckedIndexedAccess": false,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "forceConsistentCasingInFileNames": true,
+
+    // The comments in these files carry the reasoning for how the page behaves.
+    // They are the point, not noise, so they survive into the emit.
+    "removeComments": false,
+
+    "outDir": ".build",
+    "rootDir": ".",
+    "sourceMap": false,
+    "types": ["w3c-web-serial"]
+  },
+  "include": ["shared/**/*.ts", "usb/**/*.ts", "types/**/*.d.ts"],
+  "exclude": [".build", "node_modules"]
+}

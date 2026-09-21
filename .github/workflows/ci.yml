@@ -32,18 +32,43 @@ jobs:
       - name: Host tests
         run: ./test/host/run_tests.sh
 
-      # The settings page and the USB browser tool are the same page, generated
-      # from web/ and committed. They were two hand-maintained copies before,
-      # and they drifted: the tool lost the camera advisory note and never had
-      # /api/profile in its endpoint map, so switching saved cameras failed
-      # silently over USB while working over Wi-Fi. Nothing in a build catches
-      # that. This does.
+  # The two browser front-ends. They are the same page, generated from web/ and
+  # committed, so nothing downstream needs Node -- but that also means a stale
+  # commit would ship silently. These three steps are what stop it: the types
+  # have to check, the lint has to pass, and the committed HTML has to be what
+  # the sources actually produce.
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+
+      # The Endpoint union is what makes a missing USB verb a compile error
+      # rather than a feature that works over Wi-Fi and dies on the cable, so
+      # this step is load-bearing rather than hygiene.
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      - name: Lint
+        run: npx eslint .
+
+      # Compile, regenerate, and fail if either committed page moved. Catches
+      # a .ts edit that was never compiled, and a compile that was never
+      # committed -- both of which look like nothing in a diff.
       - name: Check the generated front-ends are up to date
-        run: python3 tools/build_web.py --check
+        run: npx tsc && python3 ../tools/build_web.py --check
 
   firmware:
     runs-on: ubuntu-latest
-    needs: host-tests
+    needs: [host-tests, web]
     strategy:
       fail-fast: false
       matrix:

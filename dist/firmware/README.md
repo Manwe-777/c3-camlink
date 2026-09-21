@@ -20,9 +20,9 @@ Generate both from a build:
 
 ```bash
 idf.py build
-cp build/c3-camlink.bin webtool/firmware/c3-camlink-app.bin
+cp build/c3-camlink.bin dist/firmware/c3-camlink-app.bin
 (cd build && esptool.py --chip esp32c3 merge_bin \
-    -o ../webtool/firmware/c3-camlink-full.bin @flash_args)
+    -o ../dist/firmware/c3-camlink-full.bin @flash_args)
 ```
 
 Or copy a release pair (`c3-camlink-<ver>-update.bin` and

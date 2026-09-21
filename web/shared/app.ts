@@ -1,29 +1,65 @@
-const $ = s => document.querySelector(s);
+/*
+ * The settings page, transport-free.
+ *
+ * Nothing here knows whether it is talking to the module over Wi-Fi or over a
+ * USB cable: every request goes through api(), which is a plain fetch to a
+ * relative /api/ path. On the device that is a real HTTP request; in the
+ * browser tool usb/transport.ts intercepts it and turns it into a line on the
+ * serial link. See web/README.md.
+ *
+ * This file is a PLAIN SCRIPT, not a module -- no import, no export. It is
+ * inlined into a bare <script> tag by tools/build_web.py.
+ */
+
+/* Every element this page addresses is in the markup it ships with, so a miss
+ * is a bug in the page rather than a condition to handle. Throwing names the
+ * selector; the alternative is a null dereference three lines later that
+ * names nothing. */
+function $<T extends HTMLElement = HTMLElement>(sel: string): T {
+  const el = document.querySelector<T>(sel);
+  if (!el) throw new Error('settings page is missing ' + sel);
+  return el;
+}
+
+/* The one place an /api/ path is constructed. Endpoint is a closed union, so
+ * a typo or an endpoint the USB transport cannot route is a compile error --
+ * see the note on Endpoint in types/api.d.ts. */
+function api(ep: Endpoint, init?: RequestInit): Promise<Response> {
+  return fetch('/api/' + ep, init);
+}
+
+const form = (fields: Record<string, string | number>): URLSearchParams => {
+  const p = new URLSearchParams();
+  for (const k in fields) p.set(k, String(fields[k]));
+  return p;
+};
+
 const AUX_MAX = 14;
-let pollTimer = null;
+let pollTimer: ReturnType<typeof setInterval> | null = null;
 // Redraws are suppressed until this moment, so a poll cannot replace a row
 // under a finger that is reaching for it.
 //
-// This was a counter -- incremented on pointerdown, decremented on pointerup --
-// and it leaked. A touch that turns into a scroll fires pointerdown and then
-// pointercancel, never pointerup, so one scroll left the counter stuck above
-// zero and polling stopped for the rest of the session. The page then froze:
-// selecting a camera appeared to do nothing, because nothing was redrawing it.
+// A DEADLINE, NOT A COUNTER. A counter incremented on pointerdown and
+// decremented on pointerup leaks: a touch that turns into a scroll fires
+// pointerdown and then pointercancel, never pointerup, so one scroll leaves it
+// stuck above zero and polling stops for the rest of the session. The page
+// then appears frozen -- selecting a camera does nothing, because nothing
+// redraws it.
 //
 // A deadline cannot leak. The worst case is that redraws resume a couple of
-// seconds after the last touch, which is self-correcting by construction rather
-// than by remembering to pair every event.
+// seconds after the last touch, which is self-correcting by construction
+// rather than by remembering to pair every event.
 let holdUntil = 0;
-const holdRedraw = ms => { holdUntil = Date.now() + ms; };
-const redrawAllowed = () => Date.now() >= holdUntil;
-let loaded  = false;
-let dirty   = false;          // form edited since the last successful save
+const holdRedraw = (ms: number): void => { holdUntil = Date.now() + ms; };
+const redrawAllowed = (): boolean => Date.now() >= holdUntil;
+let loaded = false;
+let dirty = false;            // form edited since the last successful save
 
 // Save is a separate button from Done & restart, so a form can be edited,
 // admired, and then discarded by a restart without a single thing on screen
 // having said so. Everything below exists to make that impossible: the button
 // says there is something to save, and the restart says what it would cost.
-function setDirty(v) {
+function setDirty(v: boolean): void {
   dirty = v;
   $('#save').textContent = v ? 'Save changes' : 'Save';
   $('#save').classList.toggle('dirty', v);
@@ -31,39 +67,42 @@ function setDirty(v) {
 
 for (let i = 1; i <= AUX_MAX; i++) {
   const o = document.createElement('option');
-  o.value = i; o.textContent = 'AUX ' + i;
+  o.value = String(i); o.textContent = 'AUX ' + i;
   $('#aux').appendChild(o);
 }
 {
   for (const sel of ['#cfgaux', '#hilight']) {
     const off = document.createElement('option');
-    off.value = 0; off.textContent = 'Off';
+    off.value = '0'; off.textContent = 'Off';
     $(sel).appendChild(off);
     for (let i = 1; i <= AUX_MAX; i++) {
       const o = document.createElement('option');
-      o.value = i; o.textContent = 'AUX ' + i;
+      o.value = String(i); o.textContent = 'AUX ' + i;
       $(sel).appendChild(o);
     }
   }
 }
 
-function toast(msg) {
+let toastTimer: ReturnType<typeof setTimeout> | undefined;
+function toast(msg: string): void {
   const t = $('#toast');
   t.textContent = msg; t.classList.add('show');
-  clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('show'), 1800);
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('show'), 1800);
 }
 
 // 900-2100, the same span Betaflight's Modes tab uses -- and the same span the
 // receiver actually produces. A CRSF or SBUS channel at +100% lands on 2012 us,
-// so a track that stopped at 2000 pinned the marker to the end and reported the
-// switch as outside the window it was visibly sitting at the top of.
+// so a track that stopped at 2000 would pin the marker to the end and report
+// the switch as outside a window it is visibly sitting at the top of.
 const US_LO = 900, US_HI = 2100;
-const pct = us => Math.max(0, Math.min(100, (us - US_LO) * 100 / (US_HI - US_LO)));
+const pct = (us: number): number =>
+  Math.max(0, Math.min(100, (us - US_LO) * 100 / (US_HI - US_LO)));
 
 // One description at a time, under the switch, for the option actually
-// chosen. Showing all of them at once is how the old layout worked and it made
-// the page a wall of text the user had to read before they could choose.
-const MODE_DESC = {
+// chosen. Showing all of them at once makes the page a wall of text the user
+// has to read before they can choose.
+const MODE_DESC: Record<string, string> = {
   '0': '<b>Recording follows arming.</b> Arm the quad and the camera rolls; ' +
        'disarm and it stops. Nothing else to set up.',
   '1': '<b>A switch on your radio starts and stops recording.</b> Arming does ' +
@@ -77,7 +116,7 @@ const MODE_DESC = {
        'always land on a stopped camera.',
 };
 
-const KIND_DESC = {
+const KIND_DESC: Record<string, string> = {
   '0': '<b>A switch that holds its position.</b> Recording runs while the ' +
        'channel sits inside the window below. Survives a brownout: the switch ' +
        'still says where it is, so the module works out the rest.',
@@ -88,7 +127,7 @@ const KIND_DESC = {
        'you left it.',
 };
 
-const CFG_KIND_DESC = {
+const CFG_KIND_DESC: Record<string, string> = {
   '0': '<b>A switch, in two parts, with the OSD counting you through it.</b> ' +
        'Flick it up and the OSD says <code>ENTER</code>; after the hold time ' +
        'it says <code>READY</code>; drop the switch and it says ' +
@@ -104,7 +143,7 @@ const CFG_KIND_DESC = {
        'the check that you are disarmed.',
 };
 
-const TX_DESC = {
+const TX_DESC: Record<string, string> = {
   '0': '<b>−24 dBm.</b> Correct once the camera is mounted on the quad, ' +
        'centimetres away. Quietest next to your receiver.',
   '1': '<b>−12 dBm.</b> Camera on the same desk.',
@@ -112,78 +151,85 @@ const TX_DESC = {
   '3': '<b>+3 dBm.</b> Maximum reach, for bench work only.',
 };
 
+const input = (sel: string): HTMLInputElement => $<HTMLInputElement>(sel);
+const select = (sel: string): HTMLSelectElement => $<HTMLSelectElement>(sel);
+const radio = (name: string): HTMLInputElement | null =>
+  document.querySelector<HTMLInputElement>(`input[name=${name}]:checked`);
+
 // Mirrors camlink_cfg_in_window() in camlink_cfg.h. A limit dragged to the end
 // of its travel means "and beyond": a receiver at +100% is not obliged to stop
 // on the number the slider stops on, and the marker must agree with the module
 // about whether the switch counts.
-function inWindow(us) {
-  const lo = +$('#min').value, hi = +$('#max').value;
+function inWindow(us: number): boolean {
+  const lo = +input('#min').value, hi = +input('#max').value;
   return (lo <= US_LO || us >= lo) && (hi >= US_HI || us <= hi);
 }
 
-function paint() {
-  const lo = +$('#min').value, hi = +$('#max').value;
-  $('#minV').textContent = lo;
-  $('#maxV').textContent = hi;
+function paint(): void {
+  const lo = +input('#min').value, hi = +input('#max').value;
+  $('#minV').textContent = String(lo);
+  $('#maxV').textContent = String(hi);
   $('#window').style.left  = pct(lo) + '%';
   $('#window').style.width = (pct(hi) - pct(lo)) + '%';
 
-  const mode = $('input[name=mode]:checked')?.value;
-  $('#modeDesc').innerHTML = MODE_DESC[mode] || '';
+  const mode = radio('mode')?.value;
+  $('#modeDesc').innerHTML = (mode && MODE_DESC[mode]) || '';
 
-  const kind = $('input[name=kind]:checked')?.value;
-  $('#kindDesc').innerHTML = KIND_DESC[kind] || '';
+  const kind = radio('kind')?.value;
+  $('#kindDesc').innerHTML = (kind && KIND_DESC[kind]) || '';
   // A button ignores the window, so showing a window to tune is a lie.
   $('#windowCard').classList.toggle('hide', kind === '1');
   // Arm mode watches arm state and nothing else, so the channel settings are
   // not merely irrelevant — showing them would imply they still apply.
   $('#chanCard').classList.toggle('hide', mode === '0');
 
-  const cfgAux  = +$('#cfgaux').value;
-  const cfgKind = $('input[name=cfgkind]:checked')?.value;
+  const cfgAux  = +select('#cfgaux').value;
+  const cfgKind = radio('cfgkind')?.value;
   $('#cfgCard').classList.toggle('hide', !cfgAux);
-  $('#cfgKindDesc').innerHTML = CFG_KIND_DESC[cfgKind] || '';
+  $('#cfgKindDesc').innerHTML = (cfgKind && CFG_KIND_DESC[cfgKind]) || '';
   // A button has no position to hold, so a hold time would be a control that
   // does nothing.
   $('#cfgHoldCard').classList.toggle('hide', cfgKind === '1');
-  const hd = +$('#cfghold').value;
+  const hd = +input('#cfghold').value;
   $('#cfgHoldV').textContent = hd === 0 ? 'instantly' : (hd / 10).toFixed(1) + ' s';
-  const sd = +$('#stopdelay').value;
+  const sd = +input('#stopdelay').value;
   $('#stopdelayV').textContent = sd === 0 ? 'off' : sd + ' s';
 
-  const tx = $('input[name=tx]:checked')?.value;
-  $('#txDesc').innerHTML = TX_DESC[tx] || '';
-  $('#txWarn').textContent = (!$('#txauto').checked && (tx === '3' || tx === '2'))
+  const tx = radio('tx')?.value;
+  $('#txDesc').innerHTML = (tx && TX_DESC[tx]) || '';
+  $('#txWarn').textContent = (!input('#txauto').checked && (tx === '3' || tx === '2'))
     ? 'Set this back to Low before flying, or switch on the option below.' : '';
 }
 
-// The two ends of the window must not cross. A min above max is a range that can
-// never match, which silently means "never record" -- a setting that looks saved
-// and does nothing is worse than one that refuses to be set.
-// Keep the two ends inside 900..2100 AND strictly apart, even at the extremes.
-// The old version pushed the other handle past 2100; the range input clamped it
-// back to 2100, leaving min == max -- a window that means "never record" and
-// that the firmware rightly refuses as out of range.
+// The two ends of the window must not cross. A min above max is a range that
+// can never match, which silently means "never record" -- a setting that looks
+// saved and does nothing is worse than one that refuses to be set.
+//
+// Each handle is clamped so the OTHER one still has somewhere to go. Pushing
+// the other handle past 2100 instead lets the range input clamp it back, which
+// leaves min == max: a window that means "never record" and that the firmware
+// rightly refuses as out of range.
 const US_MIN = 900, US_MAX = 2100, US_GAP = 5;
-$('#min').addEventListener('input', () => {
-  let lo = +$('#min').value, hi = +$('#max').value;
-  if (lo > US_MAX - US_GAP) { lo = US_MAX - US_GAP; $('#min').value = lo; }
-  if (hi <= lo) { hi = lo + US_GAP; $('#max').value = hi; }
+input('#min').addEventListener('input', () => {
+  let lo = +input('#min').value, hi = +input('#max').value;
+  if (lo > US_MAX - US_GAP) { lo = US_MAX - US_GAP; input('#min').value = String(lo); }
+  if (hi <= lo) { hi = lo + US_GAP; input('#max').value = String(hi); }
   paint();
 });
-$('#max').addEventListener('input', () => {
-  let lo = +$('#min').value, hi = +$('#max').value;
-  if (hi < US_MIN + US_GAP) { hi = US_MIN + US_GAP; $('#max').value = hi; }
-  if (lo >= hi) { lo = hi - US_GAP; $('#min').value = lo; }
+input('#max').addEventListener('input', () => {
+  let lo = +input('#min').value, hi = +input('#max').value;
+  if (hi < US_MIN + US_GAP) { hi = US_MIN + US_GAP; input('#max').value = String(hi); }
+  if (lo >= hi) { lo = hi - US_GAP; input('#min').value = String(lo); }
   paint();
 });
 document.addEventListener('input', paint);
 
-// Only the five controls that are actually persisted. The file picker and the
+// Only the controls that are actually persisted. The file picker and the
 // camera list are not settings and must not light the Save button up.
 document.addEventListener('change', e => {
   if (!loaded) return;
-  const t = e.target;
+  const t = e.target as HTMLInputElement | null;
+  if (!t) return;
   if (t.name === 'mode' || t.name === 'tx' || t.name === 'kind' ||
       t.id === 'aux' || t.id === 'min' || t.id === 'max' ||
       t.id === 'txauto' || t.id === 'cfgaux' || t.id === 'cfghold' ||
@@ -200,9 +246,9 @@ document.addEventListener('pointermove',   e => {
   if (e.buttons || e.pointerType === 'touch') holdRedraw(2000);
 });
 
-function fill(s) {
-  s.fields.forEach(f => CAT[f.id] = f);
-  CAT[0] = {id: 0, name: '', ex: '', w: 0};
+function fill(s: State): void {
+  s.fields.forEach(f => { CAT[f.id] = f; });
+  CAT[0] = { id: 0, name: '', ex: '', w: 0 };
   OSDMAX = s.osdmax;
   layout = s.osd.map(r => r.filter(id => id !== 0));
   drawOsd();
@@ -214,28 +260,28 @@ function fill(s) {
   // undefined.
   window.camlinkOnState?.(s);
   $('#fwVer').textContent = s.fw;
-  document.querySelector(`input[name=mode][value="${s.cfg.mode}"]`).checked = true;
-  document.querySelector(`input[name=tx][value="${s.cfg.tx}"]`).checked = true;
-  document.querySelector(`input[name=kind][value="${s.cfg.kind}"]`).checked = true;
-  $('#txauto').checked = !!s.cfg.txauto;
-  $('#cfgaux').value = s.cfg.cfgaux || 0;
-  $('#hilight').value = s.cfg.hilight || 0;
-  $('#stopdelay').value = (s.cfg.stopdelay != null ? s.cfg.stopdelay : 5);
-  document.querySelector(`input[name=cfgkind][value="${s.cfg.cfgkind}"]`).checked = true;
-  $('#cfghold').value = s.cfg.cfghold;
-  $('#aux').value = Math.min(Math.max(s.cfg.aux, 1), AUX_MAX);
-  $('#min').value = s.cfg.min;
-  $('#max').value = s.cfg.max;
+  $<HTMLInputElement>(`input[name=mode][value="${s.cfg.mode}"]`).checked = true;
+  $<HTMLInputElement>(`input[name=tx][value="${s.cfg.tx}"]`).checked = true;
+  $<HTMLInputElement>(`input[name=kind][value="${s.cfg.kind}"]`).checked = true;
+  input('#txauto').checked = !!s.cfg.txauto;
+  select('#cfgaux').value = String(s.cfg.cfgaux || 0);
+  select('#hilight').value = String(s.cfg.hilight || 0);
+  input('#stopdelay').value = String(s.cfg.stopdelay != null ? s.cfg.stopdelay : 5);
+  $<HTMLInputElement>(`input[name=cfgkind][value="${s.cfg.cfgkind}"]`).checked = true;
+  input('#cfghold').value = String(s.cfg.cfghold);
+  select('#aux').value = String(Math.min(Math.max(s.cfg.aux, 1), AUX_MAX));
+  input('#min').value = String(s.cfg.min);
+  input('#max').value = String(s.cfg.max);
   paint();
 }
 
-function live(s) {
+function live(s: State): void {
   $('#camBound').textContent = s.cam.bound ? 'Selected: ' + s.cam.mac
                                            : 'No camera selected';
-  $('#forget').disabled      = !s.cam.bound;
+  $<HTMLButtonElement>('#forget').disabled = !s.cam.bound;
 
   // Saved-camera profiles: tap one to make it active (takes effect next boot).
-  const pf = s.profiles || {list: [], active: -1};
+  const pf: Profiles = s.profiles || { list: [], active: -1 };
   const pw = $('#profileWrap'), pl = $('#profileList');
   if (pf.list.length >= 2) {
     pw.classList.remove('hide');
@@ -246,11 +292,13 @@ function live(s) {
         `<button class="ghost" data-idx="${i}" style="padding:6px 12px;border-radius:16px;` +
         (i === pf.active ? 'border:2px solid #0f8a4a;color:#0f8a4a;font-weight:600' : '') +
         `">${p.label}</button>`).join('');
-      pl.querySelectorAll('button').forEach(b => b.onclick = async () => {
-        try {
-          const r = await fetch('/api/profile', {method: 'POST', body: new URLSearchParams({idx: b.dataset.idx})});
-          toast(r.ok ? 'Active camera set — restart to use it' : 'Failed: ' + (await r.text()));
-        } catch (e) { toast('Failed'); }
+      pl.querySelectorAll('button').forEach(b => {
+        b.onclick = async () => {
+          try {
+            const r = await api('profile', { method: 'POST', body: form({ idx: b.dataset.idx ?? '' }) });
+            toast(r.ok ? 'Active camera set — restart to use it' : 'Failed: ' + (await r.text()));
+          } catch { toast('Failed'); }
+        };
       });
     }
   } else {
@@ -297,9 +345,9 @@ function live(s) {
   ap.textContent = s.fc.link ? (s.fc.armed ? 'ARMED' : 'disarmed') : '—';
   ap.className = 'pill ' + (s.fc.link && s.fc.armed ? 'off' : '');
 
-  const idx = +$('#aux').value + 3;
+  const idx = +select('#aux').value + 3;
   const raw = (s.fc.link && s.fc.rc) ? s.fc.rc[idx] : undefined;
-  const us  = Number.isFinite(raw) ? raw : null;
+  const us  = Number.isFinite(raw) ? (raw as number) : null;
   const m = $('#marker');
   if (us === null) {
     $('#live').textContent = s.fc.link ? 'channel not sent' : 'no link';
@@ -313,17 +361,21 @@ function live(s) {
 
 // Signal as four bars. RSSI is a log scale nobody reads at a glance, but
 // "yours is the full one" needs no explanation.
-function bars(rssi) {
-  const n = rssi > -55 ? 4 : rssi > -70 ? 3 : rssi > -82 ? 2 : 1;
+const barCount = (rssi: number): number =>
+  rssi > -55 ? 4 : rssi > -70 ? 3 : rssi > -82 ? 2 : 1;
+
+function bars(rssi: number): string {
+  const n = barCount(rssi);
   let h = '<span class="bars">';
   for (let i = 1; i <= 4; i++)
     h += `<i class="${i <= n ? 'on' : ''}" style="height:${4 + i * 3}px"></i>`;
   return h + '</span>';
 }
 
-let armedMac = null, armTimer = null;
+let armedMac: string | null = null;
+let armTimer: ReturnType<typeof setTimeout> | undefined;
 
-function renderCams(cams) {
+function renderCams(cams: Cam[]): void {
   const box = $('#camList');
   if (!cams.length) {
     box.innerHTML = '<div class="note">Looking for cameras… switch yours on ' +
@@ -333,9 +385,9 @@ function renderCams(cams) {
   // Rebuild only when something STRUCTURAL has changed -- which cameras are
   // listed, and which is selected or armed. RSSI is deliberately not in this
   // key: it moves by ten dB between adverts on a stationary camera, so keying
-  // on it rebuilt the whole list roughly every poll, and a tap could land on an
-  // element that a 400 ms refresh had already replaced. The bars are refreshed
-  // in place below instead, which is the only part that actually changed.
+  // on it would rebuild the whole list roughly every poll, and a tap could land
+  // on an element that a 400 ms refresh had already replaced. The bars are
+  // refreshed in place below instead, which is the only part that changed.
   // c.model is in the key because a GoPro's model is read from its
   // manufacturer data, which does not arrive in every advert: the row can
   // legitimately go from 'GoPro' to 'GoPro HERO (2024)' a poll later. Keyed
@@ -359,8 +411,8 @@ function renderCams(cams) {
       <div class="sub">${label} · ${c.mac}</div>${note}</div>${bars(c.rssi)}</div>`;
   }).join('');
 
-  box.querySelectorAll('.cam').forEach(el => {
-    el.onclick = () => selectCam(el.dataset.id);
+  box.querySelectorAll<HTMLElement>('.cam').forEach(el => {
+    el.onclick = () => { void selectCam(el.dataset.id ?? ''); };
   });
   paintBars(cams);
 }
@@ -368,18 +420,18 @@ function renderCams(cams) {
 // Signal strength changes constantly; the rows must not. Swap the bars inside
 // the existing elements so nothing the user is reaching for moves or is
 // replaced mid-tap.
-function paintBars(cams) {
+function paintBars(cams: Cam[]): void {
   cams.forEach(c => {
-    const el = $(`#camList .cam[data-id="${c.id}"] .bars`);
+    const el = document.querySelector(`#camList .cam[data-id="${c.id}"] .bars`);
     if (!el) return;
-    const n = c.rssi > -55 ? 4 : c.rssi > -70 ? 3 : c.rssi > -82 ? 2 : 1;
+    const n = barCount(c.rssi);
     el.querySelectorAll('i').forEach((bar, i) => bar.classList.toggle('on', i < n));
   });
 }
 
 // Two-tap, like every other destructive action on this page: rebinding points
 // the module at a different camera, and a stray tap in a list should not do it.
-async function selectCam(id) {
+async function selectCam(id: string): Promise<void> {
   if (armedMac !== id) {
     armedMac = id;
     clearTimeout(armTimer);
@@ -390,24 +442,21 @@ async function selectCam(id) {
   clearTimeout(armTimer);
   armedMac = null;
   try {
-    const r = await fetch('/api/bind', {
-      method: 'POST',
-      body: new URLSearchParams({mac: id})
-    });
+    const r = await api('bind', { method: 'POST', body: form({ mac: id }) });
     toast(r.ok ? 'Camera selected' : 'Could not select: ' + (await r.text()));
-  } catch (e) { toast('Could not select'); }
+  } catch { toast('Could not select'); }
   $('#camList').dataset.key = '';
 }
 
-async function poll() {
+async function poll(): Promise<void> {
   try {
-    const s = await (await fetch('/api/state', {cache: 'no-store'})).json();
+    const s = await (await api('state', { cache: 'no-store' })).json() as State;
     if (!loaded) { fill(s); loaded = true; }
     live(s);
-    const sc = await (await fetch('/api/scan', {cache: 'no-store'})).json();
+    const sc = await (await api('scan', { cache: 'no-store' })).json() as ScanResult;
     window._lastCams = sc.cams || [];
     renderCams(sc.cams || []);
-  } catch (e) { /* the module reboots out from under us on purpose */ }
+  } catch { /* the module reboots out from under us on purpose */ }
 }
 
 
@@ -416,19 +465,23 @@ async function poll() {
 // firmware, not from here. Widths belong to the renderer, and a copy of them in
 // this file would be a second source of truth that drifts the first time a
 // field is added.
-let CAT = {}, OSDMAX = 16, layout = null, osdDirty = false;
-const ROWS = 4, ROW_FIELDS = 4;
+const CAT: Record<number, OsdField> = {};
+let OSDMAX = 16;
+let layout: number[][] = [];
+let osdDirty = false;
+const ROW_FIELDS = 4;
 
-function setOsdDirty(v) {
+function setOsdDirty(v: boolean): void {
   osdDirty = v;
   $('#osdSave').textContent = v ? 'Save layout' : 'Saved';
   $('#osdSave').classList.toggle('dirty', v);
 }
 
-const rowWidth = r => r.reduce((w, id, i) => w + CAT[id].w + (i ? 1 : 0), 0);
-const pad = (t, n) => (t + ' '.repeat(n)).slice(0, n);
+const rowWidth = (r: number[]): number =>
+  r.reduce((w, id, i) => w + CAT[id].w + (i ? 1 : 0), 0);
+const pad = (t: string, n: number): string => (t + ' '.repeat(n)).slice(0, n);
 
-function drawOsd() {
+function drawOsd(): void {
   // Never rebuild the grid mid-drag: replacing the tiles destroys the element
   // the pointer is captured on, its pointerup never fires, and the floating
   // clone is left stuck over the page. The drag's own pointerup clears `drag`
@@ -456,26 +509,36 @@ function drawOsd() {
   const used = new Set(layout.flat());
   $('#tray').innerHTML = Object.keys(CAT).filter(id => +id && !used.has(+id))
     .map(id => `<span class="otile" data-row="-1" data-id="${id}"
-      style="min-width:${CAT[id].w}ch">${CAT[id].name}</span>`).join('')
+      style="min-width:${CAT[+id].w}ch">${CAT[+id].name}</span>`).join('')
     || '<span class="ohint">All fields placed</span>';
 
   $('#osdPrev').textContent = layout.map(r =>
     r.length ? r.map(id => pad(CAT[id].ex, CAT[id].w)).join(' ') : ' ').join('\n');
 
-  $('#osdSave').disabled = layout.some(r => rowWidth(r) > OSDMAX);
+  $<HTMLButtonElement>('#osdSave').disabled = layout.some(r => rowWidth(r) > OSDMAX);
   bindTiles();
+}
+
+interface Drag {
+  el: HTMLElement;
+  ghost: HTMLElement;
+  id: number;
+  from: number;
+  idx: number;
+  dx: number;
+  dy: number;
 }
 
 // Pointer events rather than HTML5 drag-and-drop: the settings page is opened
 // on a phone, and native dragstart/drop does not fire for touch at all. This
 // works the same for a finger and a mouse.
-let drag = null;
+let drag: Drag | null = null;
 // Safety net: if the dragged tile is torn out from under us (a redraw, an error
 // mid-drag), its own pointerup cannot fire. Catch the event at the window and
 // clean up, so a stuck clone can never block the page until a restart.
 window.addEventListener('pointerup', () => {
   if (drag && !document.body.contains(drag.el)) {
-    if (drag.ghost) drag.ghost.remove();
+    drag.ghost.remove();
     drag = null;
     document.querySelectorAll('.otile.drag').forEach(g => g.remove());
     holdRedraw(400);
@@ -484,18 +547,18 @@ window.addEventListener('pointerup', () => {
 });
 window.addEventListener('pointercancel', () => {
   if (drag) {
-    if (drag.ghost) drag.ghost.remove();
+    drag.ghost.remove();
     drag = null;
     document.querySelectorAll('.otile.drag').forEach(g => g.remove());
     drawOsd();
   }
 });
-function bindTiles() {
-  document.querySelectorAll('.otile').forEach(el => {
+function bindTiles(): void {
+  document.querySelectorAll<HTMLElement>('.otile').forEach(el => {
     el.onpointerdown = e => {
       e.preventDefault();
       document.querySelectorAll('.otile.drag').forEach(g => g.remove());
-      const ghost = el.cloneNode(true);
+      const ghost = el.cloneNode(true) as HTMLElement;
       ghost.classList.add('drag');
       const r = el.getBoundingClientRect();
       ghost.style.width = r.width + 'px';
@@ -503,8 +566,8 @@ function bindTiles() {
       ghost.style.top = r.top + 'px';
       document.body.appendChild(ghost);
       el.classList.add('ghosted');
-      drag = { el, ghost, id: +el.dataset.id,
-               from: +el.dataset.row, idx: +(el.dataset.idx ?? -1),
+      drag = { el, ghost, id: +(el.dataset.id ?? 0),
+               from: +(el.dataset.row ?? -1), idx: +(el.dataset.idx ?? -1),
                dx: e.clientX - r.left, dy: e.clientY - r.top };
       el.setPointerCapture(e.pointerId);
       holdRedraw(2000);                // keep the poll from redrawing mid-drag
@@ -515,25 +578,26 @@ function bindTiles() {
       drag.ghost.style.top  = (e.clientY - drag.dy) + 'px';
       const t = document.elementFromPoint(e.clientX, e.clientY);
       document.querySelectorAll('.orow').forEach(x => x.classList.remove('over'));
-      const row = t && t.closest('.orow');
+      const row = t?.closest('.orow');
       if (row) row.classList.add('over');
     };
     el.onpointerup = e => {
       if (!drag) return;
       const t = document.elementFromPoint(e.clientX, e.clientY);
-      const row = t && t.closest('.orow');
-      const tray = t && t.closest('#tray');
+      const row = t?.closest<HTMLElement>('.orow');
+      const tray = t?.closest('#tray');
       drag.ghost.remove();
       document.querySelectorAll('.orow').forEach(x => x.classList.remove('over'));
 
       if (drag.from >= 0) layout[drag.from].splice(drag.idx, 1);
       if (row) {
-        const dest = +row.dataset.row;
+        const dest = +(row.dataset.row ?? 0);
         if (layout[dest].length < ROW_FIELDS) {
           // Drop where the finger is, not always at the end: order within a row
           // is what decides which reading sits where on screen.
-          const tiles = [...row.querySelectorAll('.otile')].filter(x => x !== drag.el);
-          let at = tiles.findIndex(x => {
+          const dragged = drag.el;
+          const tiles = [...row.querySelectorAll('.otile')].filter(x => x !== dragged);
+          const at = tiles.findIndex(x => {
             const b = x.getBoundingClientRect();
             return e.clientX < b.left + b.width / 2;
           });
@@ -561,36 +625,34 @@ $('#osdReset').onclick = () => {
 };
 
 $('#osdSave').onclick = async () => {
-  const flat = layout.map(r => [...r, ...Array(ROW_FIELDS - r.length).fill(0)]).flat();
+  const flat = layout.map(r => [...r, ...Array<number>(ROW_FIELDS - r.length).fill(0)]).flat();
   try {
-    const r = await fetch('/api/osd', {
-      method: 'POST', body: new URLSearchParams({osd: flat.join(',')}),
-    });
+    const r = await api('osd', { method: 'POST', body: form({ osd: flat.join(',') }) });
     if (r.ok) setOsdDirty(false);
     toast(r.ok ? 'Layout saved' : 'Rejected: ' + (await r.text()));
-  } catch (e) { toast('Save failed'); }
+  } catch { toast('Save failed'); }
 };
 
 $('#save').onclick = async () => {
-  const body = new URLSearchParams({
-    mode: $('input[name=mode]:checked').value,
-    tx:   $('input[name=tx]:checked').value,
-    kind: $('input[name=kind]:checked').value,
-    txauto: $('#txauto').checked ? 1 : 0,
-    cfgaux:  $('#cfgaux').value,
-    hilight: $('#hilight').value,
-    stopdelay: $('#stopdelay').value,
-    cfgkind: $('input[name=cfgkind]:checked').value,
-    cfghold: $('#cfghold').value,
-    aux:  $('#aux').value,
-    min:  $('#min').value,
-    max:  $('#max').value,
+  const body = form({
+    mode: radio('mode')?.value ?? '',
+    tx:   radio('tx')?.value ?? '',
+    kind: radio('kind')?.value ?? '',
+    txauto: input('#txauto').checked ? 1 : 0,
+    cfgaux:  select('#cfgaux').value,
+    hilight: select('#hilight').value,
+    stopdelay: input('#stopdelay').value,
+    cfgkind: radio('cfgkind')?.value ?? '',
+    cfghold: input('#cfghold').value,
+    aux:  select('#aux').value,
+    min:  input('#min').value,
+    max:  input('#max').value,
   });
   try {
-    const r = await fetch('/api/config', {method: 'POST', body});
+    const r = await api('config', { method: 'POST', body });
     if (r.ok) setDirty(false);
     toast(r.ok ? 'Saved' : 'Rejected: ' + (await r.text()));
-  } catch (e) { toast('Save failed'); }
+  } catch { toast('Save failed'); }
 };
 
 // Native confirm()/alert() are unreliable inside a captive-portal sheet --
@@ -598,8 +660,9 @@ $('#save').onclick = async () => {
 // false without ever showing anything, which reads as "the button does
 // nothing". Both destructive actions below are therefore two-step in-page,
 // using only DOM, which works the same everywhere.
-function arm(btn, prompt, action) {
-  let armed = false, timer = null;
+function arm(btn: HTMLElement, prompt: string | (() => string), action: () => void): void {
+  let armed = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
   const original = btn.textContent;
   btn.onclick = () => {
     if (!armed) {
@@ -619,15 +682,18 @@ function arm(btn, prompt, action) {
   };
 }
 
-pollTimer = setInterval(() => { if (redrawAllowed()) poll(); }, 400);
+const startPolling = (): void => {
+  pollTimer = setInterval(() => { if (redrawAllowed()) void poll(); }, 400);
+};
+startPolling();
 
 // ---- firmware update ------------------------------------------------------
-let fwBlob = null;
-$('#fwFile').onchange = () => {
-  fwBlob = $('#fwFile').files[0] || null;
+let fwBlob: File | null = null;
+input('#fwFile').onchange = () => {
+  fwBlob = input('#fwFile').files?.[0] ?? null;
   $('#fwName').textContent = fwBlob
     ? `${fwBlob.name} (${(fwBlob.size / 1048576).toFixed(2)} MB)` : 'No file chosen';
-  $('#fwGo').disabled = !fwBlob;
+  $<HTMLButtonElement>('#fwGo').disabled = !fwBlob;
   if (fwBlob && fwBlob.size < 100000) {
     $('#fwNote').innerHTML = '<b style="color:var(--warn)">That file is only ' +
       Math.round(fwBlob.size / 1024) + ' KB — an update is normally over 1 MB. ' +
@@ -639,14 +705,16 @@ $('#fwGo').onclick = () => {
   if (!fwBlob) return;
   // Polling competes with a 1.4 MB upload for the module's few sockets, and
   // nothing on screen matters more than the transfer right now.
-  clearInterval(pollTimer);
+  if (pollTimer) clearInterval(pollTimer);
 
-  $('#fwGo').disabled = true;
+  $<HTMLButtonElement>('#fwGo').disabled = true;
   $('#fwGo').textContent = 'Uploading…';
   $('#fwTrack').style.display = 'block';
 
   // XMLHttpRequest rather than fetch: fetch has no upload progress events, and
   // a minute-long transfer with no feedback is indistinguishable from a hang.
+  // This is also why /api/update is not in the Endpoint union -- it never goes
+  // through api(), and the USB tool hides the card that reaches it.
   const x = new XMLHttpRequest();
   x.open('POST', '/api/update');
   x.upload.onprogress = ev => {
@@ -665,27 +733,27 @@ $('#fwGo').onclick = () => {
         'by itself.</p></div>';
     } else {
       $('#fwGo').textContent = 'Install';
-      $('#fwGo').disabled = false;
+      $<HTMLButtonElement>('#fwGo').disabled = false;
       $('#fwNote').innerHTML = '<b style="color:var(--bad)">Rejected: ' +
         (x.responseText || x.status) + '</b>';
-      pollTimer = setInterval(() => { if (redrawAllowed()) poll(); }, 400);
+      startPolling();
     }
   };
   x.onerror = () => {
     $('#fwGo').textContent = 'Install';
-    $('#fwGo').disabled = false;
+    $<HTMLButtonElement>('#fwGo').disabled = false;
     $('#fwNote').innerHTML =
       '<b style="color:var(--bad)">Upload failed — the module still has its ' +
       'old firmware.</b>';
-    pollTimer = setInterval(() => { if (redrawAllowed()) poll(); }, 400);
+    startPolling();
   };
   x.send(fwBlob);
 };
 
 arm($('#done'), () => (dirty || osdDirty)
       ? 'Unsaved — tap again to discard' : 'Tap again to restart', () => {
-  clearInterval(pollTimer);          // stop polling a module that is going away
-  fetch('/api/exit', {method: 'POST'}).catch(() => {});
+  if (pollTimer) clearInterval(pollTimer);   // stop polling a module that is going away
+  api('exit', { method: 'POST' }).catch(() => { /* it is leaving; nobody to tell */ });
 
   document.body.innerHTML =
     '<div class="wrap" style="padding:48px 16px"><h1>Restarting</h1>' +
@@ -696,23 +764,27 @@ arm($('#done'), () => (dirty || osdDirty)
   // opened; a captive-portal sheet usually honours it, a tab the user opened
   // themselves never will. So the screen above is the real answer and this is
   // the bonus -- never the other way round.
-  setTimeout(() => { try { window.close(); } catch (e) {} }, 400);
+  setTimeout(() => { try { window.close(); } catch { /* not ours to close */ } }, 400);
 });
 
-arm($('#repair'), 'Tap again to forget keys', async () => {
-  try {
-    const r = await fetch('/api/repair', {method: 'POST'});
-    toast(r.ok ? 'Pairing keys forgotten — the camera will ask to pair again'
-               : 'Could not clear the keys');
-  } catch (e) { toast('Could not clear the keys'); }
+arm($('#repair'), 'Tap again to forget keys', () => {
+  void (async () => {
+    try {
+      const r = await api('repair', { method: 'POST' });
+      toast(r.ok ? 'Pairing keys forgotten — the camera will ask to pair again'
+                 : 'Could not clear the keys');
+    } catch { toast('Could not clear the keys'); }
+  })();
 });
 
-arm($('#forget'), 'Tap again to release', async () => {
-  try {
-    const r = await fetch('/api/forget', {method: 'POST'});
-    toast(r.ok ? 'Camera released' : 'Failed');
-    $('#camList').dataset.key = '';
-  } catch (e) { toast('Failed'); }
+arm($('#forget'), 'Tap again to release', () => {
+  void (async () => {
+    try {
+      const r = await api('forget', { method: 'POST' });
+      toast(r.ok ? 'Camera released' : 'Failed');
+      $('#camList').dataset.key = '';
+    } catch { toast('Failed'); }
+  })();
 });
 
-poll();
+void poll();
