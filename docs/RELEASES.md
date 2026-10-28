@@ -34,6 +34,27 @@ the binaries rather than kept in the tree.
 
 ## Cutting one
 
+Nobody cuts one by hand. Every push to `main` that passes the build workflow
+runs [`release.yml`](../.github/workflows/release.yml), which uses
+[semantic-release](https://semantic-release.gitbook.io/) to read the commit
+types since the last tag (see [CONTRIBUTING.md](../CONTRIBUTING.md)):
+
+- If none of them ships anything (only `docs`, `ci`, `chore` and the like),
+  nothing happens.
+- Otherwise it picks the next version, writes it to `VERSION`, regenerates
+  `dist/index.html` so the tool's build label matches, commits both as
+  `chore(release): x.y.z`, tags `vx.y.z` and opens the GitHub release with
+  notes made from the commit summaries.
+- It then builds the firmware from that tag with `tools/release.sh`, attaches
+  the two images and the `sdkconfig` snapshot to the release, and redeploys the
+  Pages tool.
+
+The firmware reports the `VERSION` string about itself, the artifacts are named
+from it, and `tools/build_web.py` stamps it into the browser tool's build
+label, so all three agree by construction.
+
+### Building the artifacts locally
+
 ```bash
 tools/release.sh
 ```
@@ -43,8 +64,11 @@ its own, and writes both artifacts plus the `sdkconfig` snapshot into
 `releases/`. It never builds from the working `sdkconfig`: that file is
 gitignored and holds whatever menuconfig was last used for, so a release built
 from it would ship bench settings -- a debug transmit power, or the serial
-console -- in an image nobody tested that way.
+console -- in an image nobody tested that way. This is the same script the
+release workflow runs, so a local build of a tag matches what was published.
 
-Bump `VERSION` first. The firmware reports that string about itself, the
-artifacts are named from it, and `tools/build_web.py` stamps it into the browser
-tool's build label, so all three agree by construction.
+### Version numbers before 1.1.0
+
+Up to `1.1.0-31` the number was bumped by hand on every firmware commit, and
+there were no tags. `v1.1.0` marks the last of those commits; semantic-release
+counts from there.

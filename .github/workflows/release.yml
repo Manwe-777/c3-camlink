@@ -1,0 +1,131 @@
+# Cut a release from main, once the build workflow has passed on it.
+#
+# Called by ci.yml, never on its own: a release has to come from a commit whose
+# host tests, front-end checks and firmware build all passed, and a separate
+# workflow listening for pushes would race the build instead of waiting for it.
+#
+# semantic-release reads the commit types since the last tag (see
+# CONTRIBUTING.md), and if any of them ships a change it picks the next
+# version, writes it to VERSION, regenerates the USB tool so its build label
+# matches, commits both as "chore(release): x.y.z", tags vx.y.z and opens the
+# GitHub release with the notes. Nothing to release, and every job after the
+# first is skipped.
+#
+# The firmware is then built from the TAG, not from the commit this run started
+# on: the tag is the one that carries the new VERSION, and the firmware reports
+# that string about itself.
+name: release
+
+on:
+  workflow_call:
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write        # push the release commit and the tag
+      issues: write          # "released in" comments on fixed issues
+      pull-requests: write   # ...and on merged pull requests
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      # Full history: the version is computed from every commit since the
+      # last tag, and a shallow clone has neither.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      # The prepare step recompiles the front-end to restamp its build label.
+      - name: Install the front-end toolchain
+        run: npm ci
+        working-directory: web
+
+      # Pinned, and installed for this step only, so the repository root does
+      # not grow a package.json that nothing else uses. The preset stays on 8.x:
+      # 9 and later need a newer changelog writer than semantic-release 25
+      # bundles, and fail at the release-notes step with "Missing helper".
+      - name: semantic-release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >
+          npx --yes
+          -p semantic-release@25.0.9
+          -p @semantic-release/exec@7.1.0
+          -p @semantic-release/git@11.0.1
+          -p conventional-changelog-conventionalcommits@8.0.0
+          semantic-release
+
+      # semantic-release moves HEAD onto its release commit only when it made
+      # one. Checking that HEAD moved, rather than only that it is tagged, keeps
+      # a manual re-run on an already-released commit from rebuilding and
+      # re-uploading the binaries.
+      - id: tag
+        run: |
+          if [ "$(git rev-parse HEAD)" != "$GITHUB_SHA" ]; then
+            echo "tag=$(git tag --points-at HEAD | grep '^v' | head -n1)" >> "$GITHUB_OUTPUT"
+          fi
+
+  firmware:
+    needs: version
+    if: needs.version.outputs.tag != ''
+    runs-on: ubuntu-latest
+    container: espressif/idf:v5.5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.version.outputs.tag }}
+      - name: Let git use the checkout
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      # The same script a release cut by hand uses, so the two cannot drift:
+      # tracked defaults only, -update.bin, -full.bin and the sdkconfig
+      # snapshot, all named from VERSION.
+      - name: Build the release artifacts
+        shell: bash
+        run: |
+          . $IDF_PATH/export.sh
+          tools/release.sh
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-binaries
+          path: releases/
+
+  # The IDF container has no gh, so attaching happens on a plain runner.
+  attach:
+    needs: [version, firmware]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-binaries
+          path: releases
+      - name: Attach the binaries to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.version.outputs.tag }}
+        run: gh release upload "$TAG" releases/* --repo "$GITHUB_REPOSITORY"
+
+  # The release commit changed the tool's build label, but a push made with
+  # GITHUB_TOKEN starts no workflows, so pages.yml would never see it. Deploy
+  # the tagged page from here instead.
+  pages:
+    needs: version
+    if: needs.version.outputs.tag != ''
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    uses: ./.github/workflows/pages.yml
+    with:
+      ref: ${{ needs.version.outputs.tag }}

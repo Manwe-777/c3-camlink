@@ -25,6 +25,14 @@ on:
       - 'web/**'
       - '.github/workflows/pages.yml'
   workflow_dispatch:
+  # release.yml calls this after a release, with the tag, because the release
+  # commit restamps the page's build label and is pushed with GITHUB_TOKEN,
+  # which starts no workflows of its own.
+  workflow_call:
+    inputs:
+      ref:
+        type: string
+        required: true
 
 # Read the checkout, write a Pages deployment, and mint the OIDC token the
 # deploy action authenticates with.
@@ -47,6 +55,8 @@ jobs:
       url: ${{ steps.deploy.outputs.page_url }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
 
       # The staleness check compiles, so it needs Node even though nothing
       # being PUBLISHED does: dist/index.html is committed and this job only

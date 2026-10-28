@@ -2,7 +2,7 @@
 
 **Arm the quad. The camera rolls.**
 
-[![Version](https://img.shields.io/badge/version-1.1.0--27-0F8A4A?style=flat-square)](https://github.com/Manwe-777/c3-camlink/releases)
+[![Version](https://img.shields.io/github/v/release/Manwe-777/c3-camlink?style=flat-square&label=version&color=0F8A4A)](https://github.com/Manwe-777/c3-camlink/releases)
 [![Build](https://img.shields.io/github/actions/workflow/status/Manwe-777/c3-camlink/ci.yml?branch=main&style=flat-square&label=build)](https://github.com/Manwe-777/c3-camlink/actions/workflows/ci.yml)
 [![Hardware](https://img.shields.io/badge/hardware-ESP32--C3-5B636E?style=flat-square)](#what-you-need)
 [![License](https://img.shields.io/badge/license-GPL--3.0-14171C?style=flat-square)](LICENSE)
@@ -96,12 +96,16 @@ tools/                release and codegen scripts
 docs/                 roadmap, hardware testing notes, release process
 ```
 
-Two things worth knowing before editing:
+Three things worth knowing before editing:
 
 - **`components/webcfg/web/index.html` and `dist/index.html` are
   generated.** Edit the TypeScript and markup under [`web/`](web/README.md)
   and run `npm run build` there. CI fails if the committed outputs are stale.
   Node is a contributor-only dependency: building the firmware never needs it.
+- **Commit messages follow Conventional Commits** (`fix(osd): ...`), because
+  the release workflow computes the version from them. See
+  [CONTRIBUTING.md](CONTRIBUTING.md), and run
+  `git config core.hooksPath .githooks` once to check them locally.
 - **`components/dji_link/` is vendored.** Local changes are tagged in-line with
   `C3CAMLINK PATCH` or `C3CAMLINK ADDITION` so the derived work stays separable
   from DJI's original.
@@ -110,7 +114,8 @@ Two things worth knowing before editing:
 
 - [docs/ROADMAP.md](docs/ROADMAP.md) — what is next, and what is deferred
 - [docs/HARDWARE_TESTING.md](docs/HARDWARE_TESTING.md) — what has been tested on real hardware, and what has only been reasoned about
-- [docs/RELEASES.md](docs/RELEASES.md) — artifacts, recovery, cutting a release
+- [docs/RELEASES.md](docs/RELEASES.md) — artifacts, recovery, how releases are cut
+- [CONTRIBUTING.md](CONTRIBUTING.md) — the commit message format
 - [web/README.md](web/README.md) — how the two browser front-ends are generated
 
 ## Licence
