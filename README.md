@@ -7,6 +7,13 @@
 [![Hardware](https://img.shields.io/badge/hardware-ESP32--C3-5B636E?style=flat-square)](#what-you-need)
 [![License](https://img.shields.io/badge/license-GPL--3.0-14171C?style=flat-square)](LICENSE)
 
+### [Open the setup and flashing tool →](https://manwe-777.github.io/c3-camlink/)
+
+Plug the module in over USB and open
+**[manwe-777.github.io/c3-camlink](https://manwe-777.github.io/c3-camlink/)** in
+Chrome or Edge. It flashes the firmware and configures the module from the
+browser, with nothing to install.
+
 An ESP32-C3 module that starts your action camera recording the moment you arm
 and stops when you disarm. The camera's own state — recording, clip time,
 battery, card remaining — is drawn onto your Betaflight OSD, so you know it is
@@ -51,9 +58,10 @@ tab no peripheral is needed on that UART — just leave it free.
 
 ## Installing
 
-Grab the latest release and flash `c3-camlink-<version>-full.bin` at offset
-`0x0`, or open `dist/index.html` in Chrome or Edge and let it do the flashing
-over USB. After that, updates install themselves from the settings page.
+Download `c3-camlink-<version>-full.bin` from the
+[latest release](https://github.com/Manwe-777/c3-camlink/releases/latest), open
+the [browser tool](https://manwe-777.github.io/c3-camlink/) in Chrome or Edge,
+and flash it over USB. You can also flash it with `esptool.py` at offset `0x0`. After that, updates install themselves from the settings page.
 
 See [docs/RELEASES.md](docs/RELEASES.md) for what the two artifacts are, why
 they are not interchangeable, and how to recover a module that will not boot.
